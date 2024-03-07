@@ -1,6 +1,5 @@
 from django.contrib.auth import get_user_model
 from django.db import models
-from django.urls import reverse
 
 MAX_LEN = 256
 User = get_user_model()
@@ -70,9 +69,6 @@ class Post(PublishedModel):
         'Category', related_name='blogs', on_delete=models.SET_NULL, null=True,
         verbose_name='Категория')
     image = models.ImageField('Фото', upload_to='post_images', blank=True)
-
-    def get_absolute_url(self):
-        return reverse("post_detail", kwargs={"pk": self.pk})
 
     class Meta:
         verbose_name = 'публикация'
