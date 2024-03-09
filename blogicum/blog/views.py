@@ -1,6 +1,5 @@
-from django.db.models.base import Model as Model
 from django.db.models.query import QuerySet
-from django.http.response import HttpResponse, Http404
+from django.http.response import HttpResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.utils import timezone
 from django.contrib.auth.decorators import login_required
@@ -9,7 +8,6 @@ from django.contrib.auth.models import User
 from django.views.generic import (DetailView, CreateView, DeleteView, ListView,
                                   UpdateView)
 from django.urls import reverse_lazy, reverse
-from django.core.paginator import Paginator
 from django.db.models import Count
 
 from blog.models import Category, Post, Comment
@@ -27,7 +25,7 @@ class QuerySet:
                  pub_date__lte=timezone.now()).order_by('-pub_date').all()
 
 
-class PostFormMixin:
+class PostMixin:
     model = Post
     form_class = PostForm
     template_name = 'blog/create.html'
@@ -40,12 +38,11 @@ class PostFormMixin:
         return super().dispatch(request, *args, **kwargs)
 
 
-class ProfileListView(LoginRequiredMixin, QuerySet, ListView):
+class ProfileListView(QuerySet, ListView):
     """Страница профиля залогиненного пользователя"""
 
-    model = User
+    model = Post
     template_name = 'blog/profile.html'
-    form = ProfileForm
     paginate_by = POSTS_QNT
 
     def get_object(self):
@@ -99,7 +96,7 @@ class IndexListView(ListView):
 class PostDetailView(DetailView):
     """Полный текст поста"""
 
-    form_class = PostForm
+    model = Post
     template_name = 'blog/detail.html'
     pk_url_kwarg = 'post_id'
 
@@ -109,9 +106,9 @@ class PostDetailView(DetailView):
         context['comments'] = self.object.comments.select_related('author')
         return context
 
-    def get_object(self, queryset=None):
+    def get_object(self):
         post = get_object_or_404(Post, pk=self.kwargs['post_id'])
-        if self.request.user != post.author:
+        if self.request.user == post.author:
             return post
         return get_object_or_404(Post, is_published=True,
                                  category__is_published=True,
@@ -137,33 +134,18 @@ class PostCreateView(LoginRequiredMixin, CreateView):
                             kwargs={'username': self.request.user})
 
 
-class PostUpdateView(LoginRequiredMixin, UpdateView):
+class PostUpdateView(LoginRequiredMixin, PostMixin, UpdateView):
     """Редактируем пост"""
 
-    model = Post
-    form_class = PostForm
-    template_name = 'blog/create.html'
-
-    def dispatch(self, request, *args, **kwargs):
-        self.post_id = kwargs['post_id']
-        instance = get_object_or_404(Post, pk=self.post_id)
-        if instance.author != request.user:
-            return redirect('blog:post_detail', kwargs={'post_id': self.kwargs['post_id']})
-        return super().dispatch(request, *args, **kwargs)
+    def get_success_url(self) -> str:
+        return reverse('blog:profile', args=[self.request.user.username])
 
 
-class PostDeleteView(LoginRequiredMixin, DeleteView):
+class PostDeleteView(LoginRequiredMixin, PostMixin, DeleteView):
     """Удаляем пост"""
 
-    model = Post
-    success_url = reverse_lazy('blog:index')
-    template_name = 'blog/create.html'
-
-    def dispatch(self, request, *args, **kwargs) -> HttpResponse:
-        instance = get_object_or_404(Post, pk=kwargs['pk'])
-        if instance.author != request.user:
-            return redirect('blog:post_detail', pk=kwargs['pk'])
-        return super().dispatch(request, *args, **kwargs)
+    def get_success_url(self) -> str:
+        return reverse('blog:profile', args=[self.request.user.username])
 
 
 class PostCategoryView(QuerySet, ListView):
@@ -194,20 +176,23 @@ def add_comment(request, post_id) -> HttpResponse:
         comment.author = request.user
         comment.post = post
         comment.save()
-    return redirect('blog:post_detail', id=post_id)
+    return redirect('blog:post_detail', post_id=post_id)
 
 
 @login_required
 def edit_comment(request, comment_id, post_id) -> HttpResponse:
     """Редактируем комменты"""
-    instance = get_object_or_404(Comment, id=comment_id, post_id=post_id)
+    instance = get_object_or_404(Comment, id=comment_id)
     if instance.author != request.user:
         return redirect('login')
     form = CommentForm(request.POST or None, instance=instance)
     context = {'form': form, 'comment': instance}
     if form.is_valid():
-        form.save
-        return redirect('blog:post_detail', pk=post_id)
+        comment = form.save(commit=False)
+        comment.author = request.user
+        comment.post = get_object_or_404(Post, pk=post_id)
+        comment.save()
+        return redirect('blog:post_detail', post_id=post_id)
     return render(request, 'blog/comment.html', context)
 
 
@@ -220,5 +205,5 @@ def delete_comment(request, comment_id, post_id) -> HttpResponse:
     context = {'comment': instance}
     if request.method == 'POST':
         instance.delete()
-        return redirect('blog:post_detail', pk=post_id)
+        return redirect('blog:post_detail', post_id=post_id)
     return render(request, 'blog/comment.html', context)
