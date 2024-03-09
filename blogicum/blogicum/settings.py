@@ -6,7 +6,7 @@ SECRET_KEY = 'django-insecure-%$tn4y8eo@5&&*kwlsf()sk609h4+_sn)k1puparj%z=un7z*n
 
 DEBUG = True
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1",]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", ]
 
 STATIC_URL = '/static/'
 
