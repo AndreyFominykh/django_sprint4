@@ -9,6 +9,7 @@ from django.views.generic import (DetailView, CreateView, DeleteView, ListView,
                                   UpdateView)
 from django.urls import reverse_lazy, reverse
 from django.db.models import Count
+from django.http import Http404
 
 from blog.models import Category, Post, Comment
 from .forms import CommentForm, PostForm, ProfileForm
@@ -32,10 +33,13 @@ class PostMixin:
     pk_url_kwarg = 'post_id'
 
     def dispatch(self, request, *args, **kwargs):
-        post = get_object_or_404(Post, pk=self.kwargs['post_id'])
+        post = self.get_object()
         if post.author != self.request.user:
             return redirect('blog:post_detail', post_id=self.kwargs['post_id'])
         return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self) -> str:
+        return reverse('blog:profile', args=[self.request.user.username])
 
 
 class ProfileListView(QuerySet, ListView):
@@ -50,12 +54,11 @@ class ProfileListView(QuerySet, ListView):
 
     def get_queryset(self):
         queryset = Post.objects
-        self.profile = get_object_or_404(User,
-                                         username=self.kwargs['username'])
+        profile = self.get_object()
         queryset = queryset.filter(
-            author=self.profile).annotate(comment_count=Count(
+            author=profile).annotate(comment_count=Count(
                 'comments')).order_by('-pub_date')
-        if self.request.user != self.profile:
+        if self.request.user != profile:
             queryset = super().get_queryset().annotate(
                 comment_count=Count('comments'))
         return queryset
@@ -72,8 +75,7 @@ class ProfileUpdateView(LoginRequiredMixin, UpdateView):
     template_name = 'blog/user.html'
 
     def get_object(self):
-        user = get_object_or_404(User, username=self.request.user)
-        return user
+        return self.request.user
 
     def get_success_url(self):
         return reverse_lazy('blog:profile',
@@ -83,7 +85,6 @@ class ProfileUpdateView(LoginRequiredMixin, UpdateView):
 class IndexListView(ListView):
     """Показывает ленту записей"""
 
-    model = Post
     template_name = 'blog/index.html'
     ordering = '-pub_date'
     paginate_by = POSTS_QNT
@@ -96,7 +97,6 @@ class IndexListView(ListView):
 class PostDetailView(DetailView):
     """Полный текст поста"""
 
-    model = Post
     template_name = 'blog/detail.html'
     pk_url_kwarg = 'post_id'
 
@@ -107,19 +107,24 @@ class PostDetailView(DetailView):
         return context
 
     def get_object(self):
-        post = get_object_or_404(Post, pk=self.kwargs['post_id'])
-        if self.request.user == post.author:
-            return post
-        return get_object_or_404(Post, is_published=True,
-                                 category__is_published=True,
-                                 pub_date__lte=timezone.now(),
-                                 pk=self.kwargs['post_id'])
+        post = get_object_or_404(Post.objects.all()
+                                 .select_related(
+                                     'location',
+                                     'category',
+                                     'author'), pk=self.kwargs.get('post_id'))
+        if post.author != self.request.user:
+            if (
+                post.is_published is not True
+                or post.pub_date > timezone.now()
+                or post.category.is_published is not True
+            ):
+                raise Http404
+        return post
 
 
 class PostCreateView(LoginRequiredMixin, CreateView):
     """Создаём пост"""
 
-    model = Post
     form_class = PostForm
     template_name = 'blog/create.html'
 
@@ -131,21 +136,19 @@ class PostCreateView(LoginRequiredMixin, CreateView):
     def get_success_url(self):
         """Перенаправляем пользователя на его страницу"""
         return reverse_lazy('blog:profile',
-                            kwargs={'username': self.request.user})
+                            kwargs={'username': self.request.user.username})
 
 
 class PostUpdateView(LoginRequiredMixin, PostMixin, UpdateView):
     """Редактируем пост"""
 
-    def get_success_url(self) -> str:
-        return reverse('blog:profile', args=[self.request.user.username])
+    pass
 
 
 class PostDeleteView(LoginRequiredMixin, PostMixin, DeleteView):
     """Удаляем пост"""
 
-    def get_success_url(self) -> str:
-        return reverse('blog:profile', args=[self.request.user.username])
+    pass
 
 
 class PostCategoryView(QuerySet, ListView):
@@ -162,7 +165,7 @@ class PostCategoryView(QuerySet, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['categpry'] = self.category
+        context['category'] = self.category
         return context
 
 
@@ -189,8 +192,6 @@ def edit_comment(request, comment_id, post_id) -> HttpResponse:
     context = {'form': form, 'comment': instance}
     if form.is_valid():
         comment = form.save(commit=False)
-        comment.author = request.user
-        comment.post = get_object_or_404(Post, pk=post_id)
         comment.save()
         return redirect('blog:post_detail', post_id=post_id)
     return render(request, 'blog/comment.html', context)
