@@ -1,4 +1,3 @@
-from django.db.models.query import QuerySet
 from django.http.response import HttpResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.utils import timezone
@@ -18,12 +17,17 @@ from .forms import CommentForm, PostForm, ProfileForm
 POSTS_QNT = 10
 
 
-class QuerySet:
-    def get_queryset(self):
-        return Post.objects.select_related(
-            'author', 'location', 'category'
-        ).filter(is_published=True, category__is_published=True,
-                 pub_date__lte=timezone.now()).order_by('-pub_date').all()
+def base_function(add_filter=False, add_count_comment=False):
+    features = Post.objects.select_related('category', 'author',
+                                           'location')
+    if add_filter:
+        features = features.filter(is_published=True,
+                                   category__is_published=True,
+                                   pub_date__lte=timezone.now())
+    if add_count_comment:
+        features = features.annotate(
+            comment_count=Count('comments')).order_by('-pub_date')
+    return features
 
 
 class PostMixin:
@@ -42,7 +46,7 @@ class PostMixin:
         return reverse('blog:profile', args=[self.request.user.username])
 
 
-class ProfileListView(QuerySet, ListView):
+class ProfileListView(ListView):
     """Страница профиля залогиненного пользователя"""
 
     model = Post
@@ -53,15 +57,10 @@ class ProfileListView(QuerySet, ListView):
         return get_object_or_404(User, username=self.kwargs['username'])
 
     def get_queryset(self):
-        queryset = Post.objects
         profile = self.get_object()
-        queryset = queryset.filter(
-            author=profile).annotate(comment_count=Count(
-                'comments')).order_by('-pub_date')
-        if self.request.user != profile:
-            queryset = super().get_queryset().annotate(
-                comment_count=Count('comments'))
-        return queryset
+        is_author = self.request.user == profile
+        return base_function(add_filter=not is_author,
+                             add_count_comment=True).filter(author=profile)
 
     def get_context_data(self, **kwargs):
         return dict(**super().get_context_data(**kwargs),
@@ -88,10 +87,7 @@ class IndexListView(ListView):
     template_name = 'blog/index.html'
     ordering = '-pub_date'
     paginate_by = POSTS_QNT
-    queryset = Post.objects.filter(is_published=True,
-                                   category__is_published=True,
-                                   pub_date__lte=timezone.now()).annotate(
-                                       comment_count=Count('comments'))
+    queryset = base_function(add_filter=True, add_count_comment=True)
 
 
 class PostDetailView(DetailView):
@@ -151,21 +147,24 @@ class PostDeleteView(LoginRequiredMixin, PostMixin, DeleteView):
     pass
 
 
-class PostCategoryView(QuerySet, ListView):
+class PostCategoryView(ListView):
     paginate_by = POSTS_QNT
-    context = 'post_list'
     template_name = 'blog/category.html'
+
+    def get_object(self):
+        return get_object_or_404(Category,
+                                 slug=self.kwargs['category_slug'],
+                                 is_published=True)
 
     def get_queryset(self):
         category_slug = self.kwargs['category_slug']
-        self.category = get_object_or_404(Category,
-                                          slug=self.kwargs['category_slug'],
-                                          is_published=True)
-        return super().get_queryset().filter(category__slug=category_slug)
+        return base_function(add_filter=True,
+                             add_count_comment=True).filter(
+                                 category__slug=category_slug)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['category'] = self.category
+        context['category'] = self.get_object()
         return context
 
 
